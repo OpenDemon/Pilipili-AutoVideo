@@ -1,0 +1,70 @@
+version: "3.9"
+
+# ============================================================
+# 噼哩噼哩 Pilipili-AutoVideo - Docker Compose 部署配置
+#
+# 快速启动：
+#   cp configs/config.example.yaml configs/config.yaml
+#   # 编辑 configs/config.yaml 填入 API Keys
+#   docker-compose up -d
+#
+# 访问地址：
+#   Web UI:  http://localhost:3000
+#   API:     http://localhost:8000
+#   API 文档: http://localhost:8000/docs
+# ============================================================
+
+services:
+
+  # ── 后端 API 服务 ─────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: pilipili-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # 挂载配置文件（包含 API Keys）
+      - ./configs:/app/configs:ro
+      # 挂载数据目录（持久化输出、记忆数据库）
+      - pilipili-data:/app/data
+    environment:
+      # 可通过环境变量覆盖配置文件中的 API Keys
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - KLING_API_KEY=${KLING_API_KEY:-}
+      - KLING_API_SECRET=${KLING_API_SECRET:-}
+      - VOLCENGINE_API_KEY=${VOLCENGINE_API_KEY:-}
+      - MEM0_API_KEY=${MEM0_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - VIDEO_PROVIDER=${VIDEO_PROVIDER:-kling}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── 前端 Web UI ───────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    container_name: pilipili-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pilipili-data:
+    driver: local

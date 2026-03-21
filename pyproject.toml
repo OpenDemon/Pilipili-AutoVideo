@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pilipili-autovideo"
+version = "1.0.0"
+description = "全自动 AI 视频生成代理 - 噼哩噼哩 Pilipili-AutoVideo"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Pilipili Team"}
+]
+keywords = ["ai", "video", "generation", "automation", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    "pydantic>=2.7.0",
+    "openai>=1.30.0",
+    "google-generativeai>=0.7.0",
+    "httpx>=0.27.0",
+    "aiohttp>=3.9.0",
+    "requests>=2.32.0",
+    "pyyaml>=6.0.1",
+    "python-dotenv>=1.0.0",
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "tqdm>=4.66.0",
+    "pillow>=10.3.0",
+    "mutagen>=1.47.0",
+    "aiofiles>=23.2.1",
+    "python-multipart>=0.0.9",
+    "pyjwt>=2.8.0",
+]
+
+[project.optional-dependencies]
+memory = ["mem0ai>=0.1.0"]
+jianying = []  # pyJianYingDraft 需从 GitHub 安装
+whisper = ["openai-whisper>=20231117"]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+pilipili = "cli.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/pilipili-team/pilipili-autovideo"
+Repository = "https://github.com/pilipili-team/pilipili-autovideo"
+Issues = "https://github.com/pilipili-team/pilipili-autovideo/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*", "core*", "modules*", "api*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

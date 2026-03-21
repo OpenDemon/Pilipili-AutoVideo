@@ -1,0 +1,41 @@
+# ============================================================
+# 噼哩噼哩 Pilipili-AutoVideo - 后端 Dockerfile
+# ============================================================
+
+FROM python:3.11-slim
+
+# 安装系统依赖（FFmpeg 是核心依赖）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 复制依赖文件
+COPY requirements.txt .
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 可选：安装 pyJianYingDraft（如果可用）
+RUN pip install --no-cache-dir \
+    "pyJianYingDraft @ git+https://github.com/linyqh/pyJianYingDraft.git" \
+    || echo "pyJianYingDraft 安装失败，将使用 EDL 回退方案"
+
+# 复制项目代码
+COPY . .
+
+# 创建数据目录
+RUN mkdir -p data/outputs data/assets data/temp data/memory
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 启动命令
+CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

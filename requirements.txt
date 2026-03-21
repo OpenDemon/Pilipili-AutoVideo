@@ -1,0 +1,57 @@
+# 核心框架
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# LLM 调用
+openai>=1.30.0          # 兼容所有 OpenAI 格式 API（DeepSeek/Kimi/MiniMax/智谱）
+google-generativeai>=0.7.0  # Gemini / Nano Banana
+
+# HTTP 客户端
+httpx>=0.27.0
+aiohttp>=3.9.0
+requests>=2.32.0
+
+# 工作流编排
+langgraph>=0.1.0
+langchain>=0.2.0
+langchain-openai>=0.1.0
+
+# 记忆系统
+mem0ai>=0.1.0
+
+# 音频处理
+pydub>=0.25.1
+mutagen>=1.47.0         # 读取音频时长
+
+# 视频处理（FFmpeg Python 封装）
+ffmpeg-python>=0.2.0
+
+# 字幕识别
+openai-whisper>=20231117
+# whisperx>=3.1.0       # 可选：更精准的时间戳（需要单独安装）
+
+# 剪映草稿生成
+# pyJianYingDraft        # 需要从 GitHub 安装
+
+# 数据存储
+sqlalchemy>=2.0.0
+aiosqlite>=0.20.0
+
+# 配置管理
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# 工具库
+pillow>=10.3.0          # 图片处理
+aiofiles>=23.2.1        # 异步文件操作
+tqdm>=4.66.0            # 进度条
+rich>=13.7.0            # 终端美化
+click>=8.1.7            # CLI 框架
+python-multipart>=0.0.9 # 文件上传
+
+# 测试
+pytest>=8.2.0
+pytest-asyncio>=0.23.0

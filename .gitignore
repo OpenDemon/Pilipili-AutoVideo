@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.env
+
+# 配置文件（包含 API Keys，不提交）
+configs/config.yaml
+.env
+
+# 数据目录（生成的视频、图片等，体积大）
+data/
+!data/.gitkeep
+
+# 临时文件
+*.tmp
+*.log
+temp/
+
+# 前端构建产物
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docker
+*.pid

@@ -1,0 +1,120 @@
+# 噼哩噼哩 Pilipili-AutoVideo 配置文件
+# 复制此文件为 config.yaml 并填入你的 API Keys
+
+# ============================================================
+# 大脑层：LLM 配置（选择一个作为默认，其余可在 UI 中切换）
+# ============================================================
+llm:
+  default_provider: "deepseek"   # 可选: deepseek / kimi / minimax / zhipu / gemini / openai
+
+  deepseek:
+    api_key: "YOUR_DEEPSEEK_API_KEY"
+    model: "deepseek-chat"
+    base_url: "https://api.deepseek.com/v1"
+
+  kimi:
+    api_key: "YOUR_KIMI_API_KEY"
+    model: "moonshot-v1-32k"
+    base_url: "https://api.moonshot.cn/v1"
+
+  minimax:
+    api_key: "YOUR_MINIMAX_API_KEY"
+    model: "MiniMax-Text-01"
+    base_url: "https://api.minimax.chat/v1"
+
+  zhipu:
+    api_key: "YOUR_ZHIPU_API_KEY"
+    model: "glm-4"
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+  gemini:
+    api_key: "YOUR_GEMINI_API_KEY"
+    model: "gemini-1.5-pro"
+
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    model: "qwen2.5:latest"
+    api_key: "ollama"  # Ollama 不需要真实 key
+
+# ============================================================
+# 生图层：Nano Banana (Gemini 3 Pro Image)
+# ============================================================
+image_gen:
+  provider: "nano_banana"
+  api_key: "YOUR_GEMINI_API_KEY"   # 与 Gemini LLM 共用同一个 Key
+  model: "gemini-3-pro-image-preview"
+  output_resolution: "4K"
+
+# ============================================================
+# 生视频层：Kling 3.0（默认）/ Seedance 1.5（可选）
+# ============================================================
+video_gen:
+  default_provider: "kling"   # 可选: kling / seedance
+
+  kling:
+    api_key: "YOUR_KLING_API_KEY"
+    api_secret: "YOUR_KLING_API_SECRET"
+    model: "kling-v3"
+    base_url: "https://api.klingai.com"
+    default_duration: 5          # 秒，会被 TTS 时长动态覆盖
+    default_ratio: "16:9"
+    default_quality: "high"
+
+  seedance:
+    api_key: "YOUR_VOLCENGINE_API_KEY"
+    model: "doubao-seedance-1-5-pro-250528"
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+    default_duration: 5
+    default_ratio: "16:9"
+
+# ============================================================
+# 配音层：MiniMax TTS（文案类）/ Seedance 原生音频（剧情类）
+# ============================================================
+tts:
+  default_provider: "minimax"   # 可选: minimax / seedance_audio
+
+  minimax:
+    api_key: "YOUR_MINIMAX_API_KEY"
+    model: "speech-02-hd"
+    default_voice: "female-shaonv"   # 默认音色
+    speed: 1.0
+    emotion: "neutral"               # 可选: neutral / happy / sad / angry
+
+# ============================================================
+# 本地引擎配置
+# ============================================================
+local:
+  ffmpeg_path: "ffmpeg"          # 如果不在 PATH 中，填入完整路径
+  whisperx_model: "base"         # 字幕识别模型: tiny / base / small / medium / large
+  output_dir: "./data/outputs"
+  assets_dir: "./data/assets"
+  temp_dir: "./data/temp"
+
+# ============================================================
+# 剪映草稿配置
+# ============================================================
+jianying:
+  enabled: true
+  draft_dir: "./data/outputs/jianying_drafts"
+  # 如果安装了剪映，填入草稿目录路径（可选，填后自动导入）
+  # capcut_draft_dir: "/Users/yourname/Movies/CapCut/User Data/Projects/com.lveditor.draft"
+
+# ============================================================
+# 记忆系统：Mem0
+# ============================================================
+memory:
+  enabled: true
+  provider: "local"              # local（SQLite）或 mem0_cloud
+  mem0_api_key: ""               # 如果使用 Mem0 Cloud，填入 API Key
+  local_db_path: "./data/memory/mem0.db"
+  user_id: "default_user"        # 多用户场景下修改此值
+
+# ============================================================
+# 服务器配置（Web UI 模式）
+# ============================================================
+server:
+  host: "0.0.0.0"
+  port: 8000
+  frontend_port: 3000
+  cors_origins:
+    - "http://localhost:3000"
