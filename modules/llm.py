@@ -59,12 +59,12 @@ SCRIPT_SYSTEM_PROMPT = """你是一位专业的短视频脚本策划师和分镜
 你必须严格输出一个 JSON 对象，不要有任何额外的文字说明。JSON 结构如下：
 
 ```json
-{
+{{
   "title": "视频标题（中文，吸引人，适合社交媒体）",
   "style": "整体风格描述",
   "total_duration": 预估总时长（秒，整数）,
   "scenes": [
-    {
+    {{
       "scene_id": 1,
       "duration": 5,
       "image_prompt": "英文生图提示词，描述这一幕的画面构图、光线、色调、主体，要具体且视觉化，适合 AI 生图",
@@ -73,17 +73,17 @@ SCRIPT_SYSTEM_PROMPT = """你是一位专业的短视频脚本策划师和分镜
       "transition": "crossfade",
       "camera_motion": "static",
       "style_tags": ["风格标签1", "风格标签2"]
-    }
+    }}
   ],
-  "metadata": {
+  "metadata": {{
     "description": "视频描述（100字以内）",
     "tags": ["标签1", "标签2", "标签3", "标签4", "标签5"],
-    "platform_title": {
+    "platform_title": {{
       "douyin": "抖音标题（30字以内，含话题标签）",
       "bilibili": "B站标题（80字以内）"
-    }
-  }
-}
+    }}
+  }}
+}}
 ```
 
 ## 分镜规则
