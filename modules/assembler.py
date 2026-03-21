@@ -143,15 +143,30 @@ def _run_ffmpeg(cmd: list[str], verbose: bool = False) -> None:
         raise RuntimeError(f"FFmpeg 执行失败 (返回码 {result.returncode}): {error_msg[:500]}")
 
 
-def _trim_video(input_path: str, output_path: str, duration: float, verbose: bool = False) -> None:
-    """精确裁剪视频到指定时长"""
+def _trim_video(input_path: str, output_path: str, duration: float,
+                target_w: int = 1920, target_h: int = 1080,
+                verbose: bool = False) -> None:
+    """精确裁剪视频到指定时长，并统一缩放到目标分辨率
+
+    使用 scale+pad 方式：先等比缩放到目标尺寸内，再用黑边填充到精确分辨率，
+    确保所有片段分辨率一致，避免 xfade 报错。
+    """
     if os.path.exists(output_path):
         return
+
+    # scale: 等比缩放使宽高都不超过目标值, force_original_aspect_ratio=decrease
+    # pad:  用黑色填充到精确的 target_w x target_h
+    vf = (
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,"
+        f"setsar=1"
+    )
 
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
         "-t", str(duration),
+        "-vf", vf,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "18",

@@ -107,6 +107,12 @@ async def _submit_kling_i2v(
     # 时长：Kling 支持 5/10 秒，选择最接近的
     duration = 5 if scene.duration <= 7 else 10
 
+    # 根据 quality 配置确定输出分辨率
+    quality = config.video_gen.kling.default_quality or "high"
+    # Kling API: resolution 可选 "480p" / "720p" / "1080p" / "2k"
+    # high → 1080p, 其他 → 720p
+    resolution = "1080p" if quality == "high" else "720p"
+
     payload = {
         "model_name": config.video_gen.kling.model or "kling-v3",
         "image": img_b64,
@@ -116,6 +122,7 @@ async def _submit_kling_i2v(
         "mode": "std",
         "duration": str(duration),
         "aspect_ratio": config.video_gen.kling.default_ratio or "16:9",
+        "resolution": resolution,
     }
 
     url = f"{config.video_gen.kling.base_url}/v1/videos/image2video"
