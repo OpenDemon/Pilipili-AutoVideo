@@ -290,7 +290,7 @@ class TestLLMIntegration:
         mock_completion = MagicMock()
         mock_completion.choices[0].message.content = json.dumps(mock_response)
 
-        with patch("openai.AsyncOpenAI") as mock_client_class:
+        with patch("modules.llm.AsyncOpenAI") as mock_client_class:
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)

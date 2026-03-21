@@ -14,9 +14,11 @@ import os
 import asyncio
 import json
 import uuid
+import yaml
 from datetime import datetime
 from typing import Optional, Any
 from enum import Enum
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,11 +29,11 @@ from pydantic import BaseModel
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.config import get_config, PilipiliConfig
+from core.config import get_config, PilipiliConfig, get_active_llm_config, reset_config, CONFIG_SEARCH_PATHS
 from modules.llm import generate_script_sync, VideoScript, Scene, script_to_dict
 from modules.image_gen import generate_all_keyframes_sync
 from modules.tts import generate_all_voiceovers_sync, update_scene_durations
-from modules.video_gen import generate_all_video_clips_sync
+from modules.video_gen import generate_all_video_clips_sync, _generate_kling_jwt
 from modules.assembler import assemble_video, AssemblyPlan
 from modules.jianying_draft import generate_jianying_draft
 from modules.memory import get_memory_manager
@@ -105,7 +107,10 @@ class ConnectionManager:
 
     def disconnect(self, project_id: str, websocket: WebSocket):
         if project_id in self.connections:
-            self.connections[project_id].remove(websocket)
+            try:
+                self.connections[project_id].remove(websocket)
+            except ValueError:
+                pass
 
     async def broadcast(self, project_id: str, message: dict):
         """向项目的所有 WebSocket 连接广播消息"""
@@ -117,7 +122,10 @@ class ConnectionManager:
                 except Exception:
                     dead.append(ws)
             for ws in dead:
-                self.connections[project_id].remove(ws)
+                try:
+                    self.connections[project_id].remove(ws)
+                except ValueError:
+                    pass
 
 
 manager = ConnectionManager()
@@ -168,6 +176,62 @@ class UpdateApiKeysRequest(BaseModel):
     kling_api_secret: Optional[str] = None
     seedance_api_key: Optional[str] = None
     mem0_api_key: Optional[str] = None
+
+
+# ============================================================
+# 配置文件写入工具
+# ============================================================
+
+def _get_config_path() -> Optional[Path]:
+    """获取当前使用的配置文件路径"""
+    # 优先使用环境变量指定的路径
+    env_path = os.environ.get("PILIPILI_CONFIG")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    # 搜索默认路径
+    for path in CONFIG_SEARCH_PATHS:
+        if path.exists():
+            return path
+
+    # 如果都不存在，返回默认写入路径
+    default = Path("./configs/config.yaml")
+    default.parent.mkdir(parents=True, exist_ok=True)
+    return default
+
+
+def _write_config_updates(updates: dict) -> None:
+    """
+    将扁平化的 key=value 更新写入 config.yaml。
+    updates 格式: {"llm.deepseek.api_key": "sk-xxx", "tts.api_key": "sk-yyy"}
+    支持最多 3 层嵌套路径。
+    """
+    config_path = _get_config_path()
+
+    # 读取现有内容
+    if config_path and config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    else:
+        raw = {}
+
+    # 将扁平 key 写入嵌套 dict
+    for dotted_key, value in updates.items():
+        parts = dotted_key.split(".")
+        d = raw
+        for part in parts[:-1]:
+            if part not in d or not isinstance(d[part], dict):
+                d[part] = {}
+            d = d[part]
+        d[parts[-1]] = value
+
+    # 写回文件
+    if config_path:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
 # ============================================================
@@ -308,13 +372,14 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
                           keyframes=list(keyframe_paths.values()))
 
         # ── 阶段 4：图生视频 ──────────────────────────────────
+        video_engine = request.video_engine or "kling"
         await push_status(project_id, WorkflowStage.GENERATING_VIDEO, 55,
-                          f"使用 {request.video_engine.upper()} 生成视频片段...")
+                          f"使用 {video_engine.upper()} 生成视频片段...")
 
         clips_dir = os.path.join(project_dir, "clips")
 
-        engine = None if request.video_engine == "auto" else request.video_engine
-        auto_route = (request.video_engine == "auto")
+        engine = None if video_engine == "auto" else video_engine
+        auto_route = (video_engine == "auto")
 
         video_clips = await asyncio.to_thread(
             generate_all_video_clips_sync,
@@ -333,7 +398,9 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
         # ── 阶段 5：组装拼接 ──────────────────────────────────
         output_dir = os.path.join(project_dir, "output")
         temp_dir = os.path.join(project_dir, "temp")
-        final_video = os.path.join(output_dir, f"{script.title}.mp4")
+        # 清理文件名中的非法字符（Windows 兼容）
+        safe_title = "".join(c for c in script.title if c not in r'\/:*?"<>|').strip() or "output"
+        final_video = os.path.join(output_dir, f"{safe_title}.mp4")
         os.makedirs(output_dir, exist_ok=True)
 
         plan = AssemblyPlan(
@@ -348,14 +415,14 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
         await asyncio.to_thread(assemble_video, plan, True)
 
         # 生成剪映草稿
-        draft_dir = os.path.join(output_dir, "剪映草稿")
+        draft_dir = os.path.join(output_dir, "jianying_draft")
         await asyncio.to_thread(
             generate_jianying_draft,
             script=script,
             video_clips=video_clips,
             audio_clips=audio_paths,
             output_dir=draft_dir,
-            project_name=script.title,
+            project_name=safe_title,
             verbose=True,
         )
 
@@ -481,39 +548,60 @@ async def get_download_links(project_id: str):
 
 @app.post("/api/settings/keys")
 async def update_api_keys(request: UpdateApiKeysRequest):
-    """更新 API Keys 配置"""
-    config = get_config()
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs", "config.yaml")
-
+    """
+    更新 API Keys 配置
+    将 Keys 写入 config.yaml 并重置内存配置单例，立即生效
+    """
+    # 构建需要写入的更新
     updates = {}
-    if request.llm_api_key:
-        updates["llm.api_key"] = request.llm_api_key
+
     if request.llm_provider:
-        updates["llm.provider"] = request.llm_provider
+        updates["llm.default_provider"] = request.llm_provider
+
+    # LLM api_key 写入当前激活的 provider 下
+    if request.llm_api_key:
+        config = get_config()
+        provider = config.llm.default_provider
+        updates[f"llm.{provider}.api_key"] = request.llm_api_key
+
     if request.image_gen_api_key:
         updates["image_gen.api_key"] = request.image_gen_api_key
+
     if request.tts_api_key:
-        updates["tts.api_key"] = request.tts_api_key
+        updates["tts.minimax.api_key"] = request.tts_api_key
+
     if request.kling_api_key:
         updates["video_gen.kling.api_key"] = request.kling_api_key
+
     if request.kling_api_secret:
         updates["video_gen.kling.api_secret"] = request.kling_api_secret
+
     if request.seedance_api_key:
         updates["video_gen.seedance.api_key"] = request.seedance_api_key
+
     if request.mem0_api_key:
         updates["memory.mem0_api_key"] = request.mem0_api_key
 
-    return {"message": "API Keys 已更新", "updated_keys": list(updates.keys())}
+    if updates:
+        try:
+            _write_config_updates(updates)
+            # 重置配置单例，让下次请求重新加载
+            reset_config()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"配置写入失败: {str(e)}")
+
+    return {"message": "API Keys 已更新并写入配置文件", "updated_keys": list(updates.keys())}
 
 
 @app.get("/api/settings/keys/status")
 async def get_keys_status():
     """检查各 API Key 的配置状态"""
     config = get_config()
+    active_llm = get_active_llm_config(config)
     return {
         "llm": {
-            "provider": config.llm.provider,
-            "configured": bool(config.llm.api_key),
+            "provider": config.llm.default_provider,
+            "configured": bool(active_llm.api_key),
         },
         "image_gen": {
             "provider": "nano_banana",
@@ -532,10 +620,132 @@ async def get_keys_status():
     }
 
 
+class TestKeyRequest(BaseModel):
+    service: str  # llm / image_gen / tts / kling / seedance
+
+
+@app.post("/api/settings/keys/test")
+async def test_api_key(request: TestKeyRequest):
+    """
+    测试指定服务的 API Key 是否有效。
+    对每个服务发送一个最小化请求来验证 Key 的有效性。
+    """
+    config = get_config()
+    service = request.service
+
+    try:
+        if service == "llm":
+            active_llm = get_active_llm_config(config)
+            if not active_llm.api_key:
+                return {"success": False, "message": "API Key 未配置"}
+            provider = config.llm.default_provider
+            if provider == "gemini":
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(
+                    api_key=active_llm.api_key,
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+                )
+            else:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(
+                    api_key=active_llm.api_key,
+                    base_url=active_llm.base_url or "https://api.openai.com/v1"
+                )
+            resp = await client.chat.completions.create(
+                model=active_llm.model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+            )
+            return {"success": True, "message": f"{provider} 连接成功，模型: {active_llm.model}"}
+
+        elif service == "image_gen":
+            if not config.image_gen.api_key:
+                return {"success": False, "message": "API Key 未配置"}
+            from google import genai
+            client = genai.Client(api_key=config.image_gen.api_key)
+            models = list(client.models.list())
+            return {"success": True, "message": f"Gemini API 连接成功，可用模型 {len(models)} 个"}
+
+        elif service == "tts":
+            if not config.tts.api_key:
+                return {"success": False, "message": "API Key 未配置"}
+            import aiohttp
+            url = "https://api.minimax.chat/v1/t2a_v2"
+            headers = {
+                "Authorization": f"Bearer {config.tts.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": config.tts.model or "speech-02-hd",
+                "text": "测试",
+                "stream": False,
+                "voice_setting": {
+                    "voice_id": config.tts.default_voice or "female-shaonv",
+                    "speed": 1.0,
+                    "vol": 1.0,
+                    "pitch": 0,
+                },
+                "audio_setting": {
+                    "sample_rate": 32000,
+                    "format": "mp3",
+                },
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    result = await resp.json()
+            if "base_resp" in result:
+                code = result["base_resp"].get("status_code", -1)
+                msg = result["base_resp"].get("status_msg", "未知错误")
+                if code == 0:
+                    return {"success": True, "message": "MiniMax TTS 连接成功"}
+                return {"success": False, "message": f"MiniMax 返回错误: {msg} (code={code})"}
+            return {"success": False, "message": f"MiniMax 返回异常: {json.dumps(result, ensure_ascii=False)[:200]}"}
+
+        elif service == "kling":
+            if not config.video_gen.kling.api_key or not config.video_gen.kling.api_secret:
+                return {"success": False, "message": "API Key 或 API Secret 未配置"}
+            import aiohttp
+            token = _generate_kling_jwt(config.video_gen.kling.api_key, config.video_gen.kling.api_secret)
+            url = f"{config.video_gen.kling.base_url}/v1/videos/image2video"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json={}, headers=headers) as resp:
+                    status = resp.status
+            if status == 401 or status == 403:
+                return {"success": False, "message": f"Kling 认证失败 (HTTP {status})，请检查 API Key 和 Secret"}
+            return {"success": True, "message": "Kling API 认证成功"}
+
+        elif service == "seedance":
+            if not config.video_gen.seedance.api_key:
+                return {"success": False, "message": "API Key 未配置"}
+            import aiohttp
+            url = f"{config.video_gen.seedance.base_url}/contents/generations/tasks"
+            headers = {
+                "Authorization": f"Bearer {config.video_gen.seedance.api_key}",
+                "Content-Type": "application/json",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json={}, headers=headers) as resp:
+                    status = resp.status
+            if status == 401 or status == 403:
+                return {"success": False, "message": f"Seedance 认证失败 (HTTP {status})，请检查 API Key"}
+            return {"success": True, "message": "Seedance API 认证成功"}
+
+        else:
+            return {"success": False, "message": f"未知服务: {service}"}
+
+    except Exception as e:
+        return {"success": False, "message": f"连接失败: {type(e).__name__}: {str(e)}"}
+
+
 @app.post("/api/projects/{project_id}/feedback")
 async def submit_feedback(project_id: str, rating: int):
     """提交项目评分（1-5星），用于记忆系统学习"""
-    memory = get_memory_manager()
+    config = get_config()
+    memory = get_memory_manager(config)
     memory.learn_from_rating(project_id, rating)
     return {"message": f"评分 {rating} 星已记录，记忆系统已更新"}
 
@@ -551,9 +761,12 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
     """
     await manager.connect(project_id, websocket)
 
-    # 如果项目已有状态，立即推送
+    # 如果项目已有状态，立即推送（恢复场景）
     if project_id in _projects and _projects[project_id].get("status"):
-        await websocket.send_json(_projects[project_id]["status"])
+        try:
+            await websocket.send_json(_projects[project_id]["status"])
+        except Exception:
+            pass
 
     try:
         while True:
@@ -562,6 +775,8 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
+        manager.disconnect(project_id, websocket)
+    except Exception:
         manager.disconnect(project_id, websocket)
 
 

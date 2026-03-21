@@ -207,7 +207,7 @@ async def generate_script(
             {"role": "user", "content": user_message}
         ],
         temperature=0.7,
-        response_format={"type": "json_object"} if _supports_json_mode(model) else None,
+        **({"response_format": {"type": "json_object"}} if _supports_json_mode(model) else {}),
     )
 
     raw_script = response.choices[0].message.content
@@ -223,7 +223,7 @@ async def generate_script(
             {"role": "user", "content": REFLECTION_PROMPT.format(script=raw_script)}
         ],
         temperature=0.3,
-        response_format={"type": "json_object"} if _supports_json_mode(model) else None,
+        **({"response_format": {"type": "json_object"}} if _supports_json_mode(model) else {}),
     )
 
     final_script_str = reflection_response.choices[0].message.content

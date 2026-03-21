@@ -105,7 +105,7 @@ async def generate_keyframe(
         if ref_parts:
             contents.extend(ref_parts)
             contents.append(types.Part.from_text(
-                "Please maintain the appearance, style and characteristics of the subjects shown in the reference images above."
+                text="Please maintain the appearance, style and characteristics of the subjects shown in the reference images above."
             ))
 
     # 添加风格参考图
@@ -115,11 +115,11 @@ async def generate_keyframe(
         mime_type = _detect_mime_type(style_reference)
         contents.append(types.Part.from_bytes(data=style_data, mime_type=mime_type))
         contents.append(types.Part.from_text(
-            "Please use the visual style, color palette and aesthetic shown in the style reference image above."
+            text="Please use the visual style, color palette and aesthetic shown in the style reference image above."
         ))
 
     # 添加主提示词
-    contents.append(types.Part.from_text(full_prompt))
+    contents.append(types.Part.from_text(text=full_prompt))
 
     # 调用 API
     response = client.models.generate_content(
