@@ -7,13 +7,17 @@
 - 支持多参考图注入（角色一致性）
 - 支持风格参考图
 - 异步并发生成，提升效率
+
+会话级模型黑名单机制：
+- 一旦某个模型在本次任务中出现 503/超时，立即加入 _FAILED_MODELS 集合
+- 后续所有 Scene 直接跳过黑名单中的模型，不再浪费时间重试
+- 黑名单仅在进程生命周期内有效，重启后自动清空
 """
 
 import os
 import asyncio
-import aiohttp
 import base64
-import hashlib
+import concurrent.futures
 from pathlib import Path
 from typing import Optional
 from google import genai
@@ -21,6 +25,25 @@ from google.genai import types
 
 from core.config import PilipiliConfig, get_config
 from modules.llm import Scene
+
+
+# ============================================================
+# 会话级模型黑名单（进程级单例，重启自动清空）
+# ============================================================
+_FAILED_MODELS: set[str] = set()
+
+
+def _mark_model_failed(model_name: str, reason: str, verbose: bool = False) -> None:
+    """将模型加入黑名单，本次任务不再使用"""
+    if model_name not in _FAILED_MODELS:
+        _FAILED_MODELS.add(model_name)
+        if verbose:
+            print(f"[ImageGen] ⚠️  模型 {model_name} 已加入黑名单（{reason}），本次任务后续分镜将跳过此模型")
+
+
+def reset_failed_models() -> None:
+    """手动清空黑名单（供测试或新任务调用）"""
+    _FAILED_MODELS.clear()
 
 
 # ============================================================
@@ -96,8 +119,6 @@ async def generate_keyframe(
             if os.path.exists(ref_path):
                 with open(ref_path, "rb") as f:
                     img_data = f.read()
-                img_b64 = base64.b64encode(img_data).decode()
-                # 检测图片格式
                 mime_type = _detect_mime_type(ref_path)
                 ref_parts.append(
                     types.Part.from_bytes(data=img_data, mime_type=mime_type)
@@ -131,39 +152,79 @@ async def generate_keyframe(
     # 添加主提示词
     contents.append(types.Part.from_text(text=full_prompt))
 
-    # 调用 API，503 时自动切换备用模型
-    # 图像生成 fallback 列表（均经过 ListModels 确认存在）
+    # -------------------------------------------------------
+    # 模型 fallback 列表（均经过 ListModels 确认存在）
+    # 会话级黑名单：已失败的模型直接跳过，不再重试
+    # -------------------------------------------------------
     FALLBACK_MODELS = [
         config.image_gen.model,                    # config 配置的主模型
         "models/gemini-2.5-flash-image",           # 备选：2.5 Flash 图像版
         "models/gemini-3.1-flash-image-preview",   # 备选：3.1 Flash 图像预览版
     ]
     # 去重保序
-    seen = set()
+    seen: set[str] = set()
     model_list = [m for m in FALLBACK_MODELS if not (m in seen or seen.add(m))]
+
+    # 过滤掉本次任务已知失败的模型
+    available_models = [m for m in model_list if m not in _FAILED_MODELS]
+    if not available_models:
+        raise RuntimeError(
+            f"Scene {scene.scene_id} 所有图像模型均已加入黑名单，无可用模型。"
+            "请重启后端以重置黑名单，或检查 API Key 是否有效。"
+        )
+
+    if verbose and len(available_models) < len(model_list):
+        skipped = [m for m in model_list if m in _FAILED_MODELS]
+        print(f"[ImageGen] Scene {scene.scene_id} 跳过黑名单模型: {skipped}")
+
+    IMAGE_GEN_TIMEOUT = 120  # 秒，超时后自动切换下一个模型
 
     last_err = None
     response = None
-    for model_name in model_list:
+
+    for model_name in available_models:
         try:
             if verbose and model_name != config.image_gen.model:
-                print(f"[ImageGen] 主模型不可用，切换到备用模型: {model_name}")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"],
+                print(f"[ImageGen] 使用备用模型: {model_name}")
+            elif verbose:
+                print(f"[ImageGen] 使用模型: {model_name}")
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"],
+                    )
                 )
-            )
+                try:
+                    response = future.result(timeout=IMAGE_GEN_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    _mark_model_failed(model_name, f"超时 {IMAGE_GEN_TIMEOUT}s", verbose)
+                    last_err = TimeoutError(f"模型 {model_name} 超时")
+                    response = None
+                    continue
+
             break  # 成功则退出循环
+
         except Exception as e:
             last_err = e
             err_str = str(e)
-            if ("503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str) and "404" not in err_str:
-                if verbose:
-                    print(f"[ImageGen] 模型 {model_name} 不可用 ({err_str[:60]})，尝试下一个...")
+            if "404" in err_str:
+                # 模型不存在，加入黑名单
+                _mark_model_failed(model_name, "404 模型不存在", verbose)
                 continue
-            raise  # 404/其他错误直接抛出，不尝试下一个模型
+            elif "503" in err_str or "UNAVAILABLE" in err_str:
+                _mark_model_failed(model_name, "503 服务不可用", verbose)
+                continue
+            elif "429" in err_str:
+                # 限速，加入黑名单（本次任务内不再尝试）
+                _mark_model_failed(model_name, "429 限速", verbose)
+                continue
+            else:
+                raise  # 其他未知错误直接抛出
+
     if response is None:
         raise RuntimeError(f"Scene {scene.scene_id} 所有图像模型均不可用: {last_err}")
 
@@ -188,7 +249,6 @@ async def generate_keyframe(
             break
 
     if not image_saved:
-        # 打印完整 response 结构便于调试
         finish_reason = None
         if candidates and candidates[0]:
             finish_reason = getattr(candidates[0], 'finish_reason', None)
@@ -252,7 +312,6 @@ async def generate_all_keyframes(
             # 如果没有参考图，尝试用 appearance_prompt 增强 image_prompt
             enhanced_scene = scene
             if not scene_refs and char_map and scene.characters_in_scene:
-                # 收集本分镜出现的所有角色的 appearance_prompt
                 appearance_parts = []
                 for cid in scene.characters_in_scene:
                     char = char_map.get(cid)
@@ -261,7 +320,6 @@ async def generate_all_keyframes(
                         if ap:
                             appearance_parts.append(ap)
                 if appearance_parts:
-                    # 将外貌描述追加到 image_prompt 末尾，帮助 Gemini 保持角色一致性
                     from dataclasses import replace as dc_replace
                     extra = "; ".join(appearance_parts)
                     new_prompt = f"{scene.image_prompt}. CHARACTER APPEARANCE (maintain consistency): {extra}"
