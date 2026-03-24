@@ -635,7 +635,11 @@ def _parse_video_analysis(raw_analysis: str, video_path: str) -> ReferenceVideoA
     """解析 Gemini 视频分析结果为结构化对象"""
     try:
         data = _parse_json_safely(raw_analysis)
-    except Exception:
+    except Exception as parse_err:
+        # 解析失败时打印调试信息，方便排查
+        print(f"[LLM] ⚠️  JSON 解析失败: {parse_err}")
+        print(f"[LLM] raw_analysis 前500字符: {raw_analysis[:500]}")
+        print(f"[LLM] raw_analysis 后200字符: {raw_analysis[-200:]}")
         # 解析失败时返回最小化结果
         return ReferenceVideoAnalysis(
             title="视频分析结果",
