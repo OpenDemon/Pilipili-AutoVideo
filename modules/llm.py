@@ -429,9 +429,22 @@ async def analyze_reference_video(
         if verbose:
             print(f"[LLM] 视频处理完成，开始分析...")
 
-        # 调用 Gemini 分析视频
+        # 调用 Gemini 分析视频（优先用 config 中的模型，fallback 到 gemini-2.5-flash）
+        gemini_model = getattr(config.llm.gemini, 'model', None) or "gemini-2.5-flash"
+        # 已下线的 Gemini 模型，强制升级到 gemini-2.5-flash
+        DEPRECATED_GEMINI_MODELS = {
+            "gemini-2.0-flash", "gemini-2.0-flash-exp",
+            "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-pro-latest",
+            "gemini-1.0-pro", "gemini-pro",
+        }
+        if gemini_model in DEPRECATED_GEMINI_MODELS:
+            if verbose:
+                print(f"[LLM] 模型 {gemini_model} 已下线，自动切换到 gemini-2.5-flash")
+            gemini_model = "gemini-2.5-flash"
+        if verbose:
+            print(f"[LLM] 使用 Gemini 模型: {gemini_model}")
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=gemini_model,
             contents=[
                 types.Content(
                     role="user",

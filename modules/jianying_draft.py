@@ -206,11 +206,13 @@ def _generate_scene_manifest(
     audio_clips: dict[int, str],
     output_dir: str,
     project_name: str,
-) -> None:
+) -> str:
     """
     生成分镜素材清单 JSON
     记录每个分镜的视频/音频路径、时长、旁白、提示词等信息
     方便用户了解每个片段对应的内容，也可用于后续重新生成单个分镜
+    Returns:
+        manifest_path: 生成的清单 JSON 文件路径
     """
     manifest = {
         "project_name": project_name,
@@ -249,6 +251,7 @@ def _generate_scene_manifest(
     manifest_path = os.path.join(output_dir, f"{project_name}_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
+    return manifest_path
 
 
 def _generate_edl_fallback(
