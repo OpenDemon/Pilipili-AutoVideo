@@ -92,6 +92,58 @@ _projects: dict[str, dict] = {}
 _review_events: dict[str, asyncio.Event] = {}  # 用于暂停/恢复
 _review_decisions: dict[str, dict] = {}         # 用户审核决策
 
+# 项目元数据持久化目录
+PROJECTS_META_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "projects_meta")
+os.makedirs(PROJECTS_META_DIR, exist_ok=True)
+
+
+def save_project_meta(project_id: str):
+    """将项目元数据（不含大字段）持久化到磁盘"""
+    try:
+        proj = _projects.get(project_id, {})
+        meta = {
+            "id": proj.get("id", project_id),
+            "topic": proj.get("topic", ""),
+            "created_at": proj.get("created_at", datetime.now().isoformat()),
+            "status": proj.get("status", {}),
+            "from_analysis": proj.get("from_analysis"),
+            "result_path": proj.get("result", {}).get("final_video") if proj.get("result") else None,
+        }
+        path = os.path.join(PROJECTS_META_DIR, f"{project_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[持久化] 保存项目 {project_id} 元数据失败: {e}")
+
+
+def load_all_project_metas():
+    """启动时从磁盘恢复所有项目元数据"""
+    try:
+        for fname in sorted(os.listdir(PROJECTS_META_DIR)):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(PROJECTS_META_DIR, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                pid = meta.get("id", fname.replace(".json", ""))
+                if pid not in _projects:
+                    _projects[pid] = {
+                        "id": pid,
+                        "topic": meta.get("topic", ""),
+                        "created_at": meta.get("created_at", ""),
+                        "status": meta.get("status", {"stage": "completed", "progress": 100}),
+                        "script": None,
+                        "result": {"final_video": meta["result_path"]} if meta.get("result_path") else None,
+                        "from_analysis": meta.get("from_analysis"),
+                        "_restored": True,  # 标记为从磁盘恢复
+                    }
+            except Exception as e:
+                print(f"[持久化] 加载 {fname} 失败: {e}")
+        print(f"[持久化] 已从磁盘恢复 {len(_projects)} 个历史项目")
+    except Exception as e:
+        print(f"[持久化] 加载历史项目失败: {e}")
+
 
 # ============================================================
 # WebSocket 连接管理
@@ -366,16 +418,18 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             await push_status(project_id, WorkflowStage.GENERATING_SCRIPT, 5,
                               "使用对标视频分析分镜，跳过 LLM 生成...")
             preset_scene_objs = []
-            for sd in request.preset_scenes:
+            for i, sd in enumerate(request.preset_scenes):
+                # 兼容 voiceover_text 和 voiceover 两种字段名（对标分析返回 voiceover_text）
+                voiceover_val = sd.get("voiceover") or sd.get("voiceover_text") or ""
                 preset_scene_objs.append(Scene(
-                    scene_id=sd.get("scene_id", 0),
-                    duration=float(sd.get("duration", 5)),
-                    image_prompt=sd.get("image_prompt", ""),
-                    video_prompt=sd.get("video_prompt", ""),
-                    voiceover=sd.get("voiceover", ""),
-                    transition=sd.get("transition", "crossfade"),
-                    camera_motion=sd.get("camera_motion", "static"),
-                    style_tags=sd.get("style_tags", []),
+                    scene_id=sd.get("scene_id") or (i + 1),
+                    duration=float(sd.get("duration") or 5),
+                    image_prompt=sd.get("image_prompt") or "",
+                    video_prompt=sd.get("video_prompt") or "",
+                    voiceover=voiceover_val,
+                    transition=sd.get("transition") or "crossfade",
+                    camera_motion=sd.get("camera_motion") or "static",
+                    style_tags=sd.get("style_tags") or [],
                     shot_mode=sd.get("shot_mode"),
                 ))
             script = VideoScript(
@@ -448,7 +502,15 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
         if decision.get("scenes"):
             updated_scenes = []
             for scene_data in decision["scenes"]:
-                scene = Scene(**scene_data)
+                # 防止前端传来的 null 字段导致 None.strip() 崩溃
+                safe_data = dict(scene_data)
+                safe_data["voiceover"] = safe_data.get("voiceover") or ""
+                safe_data["image_prompt"] = safe_data.get("image_prompt") or ""
+                safe_data["video_prompt"] = safe_data.get("video_prompt") or ""
+                safe_data["transition"] = safe_data.get("transition") or "crossfade"
+                safe_data["camera_motion"] = safe_data.get("camera_motion") or "static"
+                safe_data["style_tags"] = safe_data.get("style_tags") or []
+                scene = Scene(**safe_data)
                 updated_scenes.append(scene)
             script.scenes = updated_scenes
 
@@ -475,6 +537,7 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             scenes=script.scenes,
             output_dir=images_dir,
             reference_images=request.reference_images or [],
+            characters=script.characters or [],
             config=config,
             verbose=True,
         )
@@ -484,6 +547,7 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             scenes=script.scenes,
             output_dir=audio_dir,
             voice_id=request.voice_id,
+            characters=script.characters or [],
             config=config,
             verbose=True,
         )
@@ -571,6 +635,7 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             f"🎉 视频生成完成！《{script.title}》",
             result=result
         )
+        save_project_meta(project_id)  # 完成时持久化最终状态
 
     except Exception as e:
         import traceback
@@ -580,6 +645,7 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             f"工作流执行失败: {error_msg}",
             error=traceback.format_exc()
         )
+        save_project_meta(project_id)  # 失败时也持久化状态
 
 
 # ============================================================
@@ -605,6 +671,7 @@ async def create_project(request: CreateProjectRequest, background_tasks: Backgr
         "result": None,
     }
 
+    save_project_meta(project_id)
     background_tasks.add_task(run_workflow, project_id, request)
 
     return {"project_id": project_id, "message": "工作流已启动"}
@@ -1145,6 +1212,7 @@ async def create_project_from_analysis(
         "from_analysis": analysis_id,
     }
 
+    save_project_meta(project_id)
     background_tasks.add_task(run_workflow, project_id, req)
 
     return {
@@ -1254,6 +1322,16 @@ async def download_draft(project_id: str):
         filename="jianying_draft.zip",
         headers={"Content-Disposition": 'attachment; filename="jianying_draft.zip"'}
     )
+
+
+# ============================================================
+# 应用生命周期事件
+# ============================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """FastAPI 启动时自动恢复历史项目"""
+    load_all_project_metas()
 
 
 # ============================================================

@@ -45,6 +45,8 @@ class Scene:
     # v2.0 新增
     shot_mode: Optional[ShotMode] = None            # 生成模式（LLM 自动标注）
     character_refs: Optional[list[str]] = None      # 多主体参考图路径列表（Omni image_list）
+    speaker_id: Optional[int] = None               # 说话人 ID（对应 characters 列表，用于 TTS 音色分配）
+    characters_in_scene: Optional[list[int]] = None # 本分镜出现的角色 ID 列表
 
     def __post_init__(self):
         # 强制将 None 字段转为安全默认值，防止 LLM/前端传来 null 导致 .strip() 崩溃
@@ -70,6 +72,7 @@ class VideoScript:
     style: str
     total_duration: float
     scenes: list[Scene]
+    characters: list = field(default_factory=list)  # 人物列表（CharacterInfo），用于 TTS 音色分配和外貌一致性
     metadata: dict = field(default_factory=dict)  # 标题、描述、tags 等发布元数据
 
 
@@ -84,6 +87,7 @@ class CharacterInfo:
     name: str                          # 人物名称（如"男主角"、"女主角"）
     description: str                   # 外貌描述（中文）
     appearance_prompt: str             # 外貌英文提示词（用于生图）
+    gender: str = "female"             # 性别: male / female（用于 TTS 音色分配）
     thumbnail_base64: Optional[str] = None  # 截图缩略图（base64）
     replacement_image: Optional[str] = None  # 替换参考图路径（用户上传）
 
@@ -119,6 +123,15 @@ SCRIPT_SYSTEM_PROMPT = """你是一位专业的短视频脚本策划师和分镜
   "title": "视频标题（中文，吸引人，适合社交媒体）",
   "style": "整体风格描述",
   "total_duration": 预估总时长（秒，整数）,
+  "characters": [
+    {{
+      "character_id": 1,
+      "name": "角色名称（如男主角、女主角）",
+      "description": "外貌描述（中文）",
+      "appearance_prompt": "English appearance description for image generation, include hair color, eye color, clothing, body type",
+      "gender": "male或female"
+    }}
+  ],
   "scenes": [
     {{
       "scene_id": 1,
@@ -129,7 +142,9 @@ SCRIPT_SYSTEM_PROMPT = """你是一位专业的短视频脚本策划师和分镜
       "transition": "crossfade",
       "camera_motion": "static",
       "style_tags": ["风格标签1", "风格标签2"],
-      "shot_mode": "i2v"
+      "shot_mode": "i2v",
+      "speaker_id": 1,
+      "characters_in_scene": [1]
     }}
   ],
   "metadata": {{
@@ -149,9 +164,12 @@ SCRIPT_SYSTEM_PROMPT = """你是一位专业的短视频脚本策划师和分镜
 2. `image_prompt` 必须是英文，要包含：主体描述、场景环境、光线风格、色调、构图方式
 3. `video_prompt` 必须是英文，描述运动和动态，不要重复 image_prompt 的内容
 4. `voiceover` 是中文，语速约每秒 3-4 个字，要与画面内容匹配
-5. `transition` 可选值：crossfade / fade / wipe / cut / zoom
-6. `camera_motion` 可选值：static / pan_left / pan_right / zoom_in / zoom_out / tilt_up / tilt_down
+5. `transition` 可选値：crossfade / fade / wipe / cut / zoom
+6. `camera_motion` 可选値：static / pan_left / pan_right / zoom_in / zoom_out / tilt_up / tilt_down
 7. 第一幕要有强烈的视觉冲击力，最后一幕要有收尾感
+8. `characters` 列表：如果视频有固定人物，必须列出所有主要角色，并标注 `gender`（male/female）
+9. `speaker_id`：每个分镜必须标注说话人（对应 characters 的 character_id），纯旁白/无对话的分镜标注主要讲述者 ID
+10. `characters_in_scene`：本分镜出现的所有角色 ID 列表
 
 ## shot_mode 标注规则（重要）
 
@@ -743,6 +761,17 @@ def _parse_json_safely(text: str) -> dict:
 
 def _dict_to_video_script(data: dict, topic: str) -> VideoScript:
     """将字典转换为 VideoScript 对象"""
+    # 解析 characters
+    characters = []
+    for c in data.get("characters", []):
+        characters.append(CharacterInfo(
+            character_id=c.get("character_id") or (len(characters) + 1),
+            name=c.get("name") or "",
+            description=c.get("description") or "",
+            appearance_prompt=c.get("appearance_prompt") or "",
+            gender=c.get("gender") or "female",
+        ))
+
     scenes = []
     for s in data.get("scenes", []):
         scene = Scene(
@@ -757,6 +786,8 @@ def _dict_to_video_script(data: dict, topic: str) -> VideoScript:
             reference_character=s.get("reference_character"),
             shot_mode=s.get("shot_mode"),
             character_refs=s.get("character_refs"),
+            speaker_id=s.get("speaker_id"),
+            characters_in_scene=s.get("characters_in_scene"),
         )
         scenes.append(scene)
 
@@ -768,6 +799,7 @@ def _dict_to_video_script(data: dict, topic: str) -> VideoScript:
         style=data.get("style", ""),
         total_duration=total_duration,
         scenes=scenes,
+        characters=characters,
         metadata=data.get("metadata", {}),
     )
 

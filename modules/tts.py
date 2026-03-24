@@ -91,7 +91,7 @@ async def generate_voiceover(
             print(f"[TTS] Scene {scene.scene_id} 配音已存在，时长: {duration:.2f}s")
         return output_path, duration
 
-    if not scene.voiceover.strip():
+    if not (scene.voiceover or "").strip():
         if verbose:
             print(f"[TTS] Scene {scene.scene_id} 无旁白文案，跳过")
         return "", 0.0
@@ -163,6 +163,13 @@ async def generate_voiceover(
     return output_path, duration
 
 
+# 性别默认音色映射
+DEFAULT_VOICE_BY_GENDER = {
+    "male": "male-qinchen",
+    "female": "female-shaonv",
+}
+
+
 async def generate_all_voiceovers(
     scenes: list[Scene],
     output_dir: str,
@@ -172,22 +179,37 @@ async def generate_all_voiceovers(
     config: Optional[PilipiliConfig] = None,
     max_concurrent: int = 5,
     verbose: bool = False,
+    characters: Optional[list] = None,  # list[CharacterInfo]
 ) -> dict[int, tuple[str, float]]:
     """
     并发生成所有分镜的配音
 
+    如果传入 characters 列表，将根据 scene.speaker_id 自动分配对应性别的音色。
+
     Returns:
         {scene_id: (audio_path, duration)} 字典
     """
+    # 构建 character_id -> voice_id 映射
+    char_voice_map: dict[int, str] = {}
+    if characters:
+        for char in characters:
+            cid = char.character_id if hasattr(char, 'character_id') else char.get('character_id')
+            gender = (char.gender if hasattr(char, 'gender') else char.get('gender', 'female')) or 'female'
+            char_voice_map[cid] = DEFAULT_VOICE_BY_GENDER.get(gender.lower(), "female-shaonv")
+
     semaphore = asyncio.Semaphore(max_concurrent)
     results = {}
 
     async def _generate_with_semaphore(scene: Scene):
         async with semaphore:
+            # 根据 speaker_id 自动选择音色
+            scene_voice = voice_id
+            if char_voice_map and scene.speaker_id is not None:
+                scene_voice = char_voice_map.get(scene.speaker_id, voice_id)
             path, duration = await generate_voiceover(
                 scene=scene,
                 output_dir=output_dir,
-                voice_id=voice_id,
+                voice_id=scene_voice,
                 emotion=emotion,
                 speed=speed,
                 config=config,
@@ -210,6 +232,7 @@ def generate_all_voiceovers_sync(
     config: Optional[PilipiliConfig] = None,
     max_concurrent: int = 5,
     verbose: bool = False,
+    characters: Optional[list] = None,
 ) -> dict[int, tuple[str, float]]:
     """generate_all_voiceovers 的同步版本"""
     return asyncio.run(generate_all_voiceovers(
@@ -221,6 +244,7 @@ def generate_all_voiceovers_sync(
         config=config,
         max_concurrent=max_concurrent,
         verbose=verbose,
+        characters=characters,
     ))
 
 

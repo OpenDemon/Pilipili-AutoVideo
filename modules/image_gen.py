@@ -211,6 +211,7 @@ async def generate_all_keyframes(
     config: Optional[PilipiliConfig] = None,
     max_concurrent: int = 3,
     verbose: bool = False,
+    characters: Optional[list] = None,  # list[CharacterInfo]
 ) -> dict[int, str]:
     """
     并发生成所有分镜的关键帧
@@ -223,10 +224,19 @@ async def generate_all_keyframes(
         config: 配置对象
         max_concurrent: 最大并发数（避免 API 限速）
         verbose: 是否打印调试信息
+        characters: 角色列表（CharacterInfo），无参考图时用 appearance_prompt 增强一致性
 
     Returns:
         {scene_id: image_path} 字典
     """
+    # 构建 character_id -> CharacterInfo 映射
+    char_map: dict[int, object] = {}
+    if characters:
+        for char in characters:
+            cid = char.character_id if hasattr(char, 'character_id') else char.get('character_id')
+            if cid is not None:
+                char_map[cid] = char
+
     semaphore = asyncio.Semaphore(max_concurrent)
     results = {}
 
@@ -239,8 +249,26 @@ async def generate_all_keyframes(
             elif reference_images:
                 scene_refs = reference_images
 
+            # 如果没有参考图，尝试用 appearance_prompt 增强 image_prompt
+            enhanced_scene = scene
+            if not scene_refs and char_map and scene.characters_in_scene:
+                # 收集本分镜出现的所有角色的 appearance_prompt
+                appearance_parts = []
+                for cid in scene.characters_in_scene:
+                    char = char_map.get(cid)
+                    if char:
+                        ap = char.appearance_prompt if hasattr(char, 'appearance_prompt') else char.get('appearance_prompt', '')
+                        if ap:
+                            appearance_parts.append(ap)
+                if appearance_parts:
+                    # 将外貌描述追加到 image_prompt 末尾，帮助 Gemini 保持角色一致性
+                    from dataclasses import replace as dc_replace
+                    extra = "; ".join(appearance_parts)
+                    new_prompt = f"{scene.image_prompt}. CHARACTER APPEARANCE (maintain consistency): {extra}"
+                    enhanced_scene = dc_replace(scene, image_prompt=new_prompt)
+
             path = await generate_keyframe(
-                scene=scene,
+                scene=enhanced_scene,
                 output_dir=output_dir,
                 reference_images=scene_refs,
                 style_reference=style_reference,
@@ -263,6 +291,7 @@ def generate_all_keyframes_sync(
     config: Optional[PilipiliConfig] = None,
     max_concurrent: int = 3,
     verbose: bool = False,
+    characters: Optional[list] = None,
 ) -> dict[int, str]:
     """generate_all_keyframes 的同步版本"""
     return asyncio.run(generate_all_keyframes(
@@ -273,6 +302,7 @@ def generate_all_keyframes_sync(
         config=config,
         max_concurrent=max_concurrent,
         verbose=verbose,
+        characters=characters,
     ))
 
 
