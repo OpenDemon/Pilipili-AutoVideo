@@ -7,7 +7,7 @@ pydantic-settings>=2.3.0
 
 # LLM 调用
 openai>=1.30.0          # 兼容所有 OpenAI 格式 API（DeepSeek/Kimi/MiniMax/智谱）
-google-generativeai>=0.7.0  # Gemini / Nano Banana
+google-genai>=0.8.0          # Gemini 新版 SDK，用法: from google import genai
 
 # HTTP 客户端
 httpx>=0.27.0
