@@ -204,17 +204,44 @@ def _build_omni_prompt(
     return prompt, image_b64_list
 
 
-async def _upload_image_to_kling(
+async def _upload_image_to_cdn(
     image_path: str,
-    config: PilipiliConfig,
     session: aiohttp.ClientSession,
 ) -> str:
     """
-    将本地图片上传到 Kling 图片托管服务，返回可公开访问的 URL
-    如果上传失败，回退到 base64 内联
+    将本地图片压缩后上传到 catbox.moe 免费 CDN，返回可公开访问的 URL。
+    纯 Python + HTTP 实现，Windows / Linux 均兼容。
+    catbox.moe 文件永久保存，无需账号，支持最大 200MB。
     """
-    # Kling 支持直接传 base64，格式为纯 base64 字符串
-    return _image_to_base64(image_path)
+    import io as _io
+    from PIL import Image as _PILImage
+
+    # 压缩图片到 960x540，JPEG quality=75，确保上传快速
+    img = _PILImage.open(image_path)
+    img.thumbnail((960, 540), _PILImage.LANCZOS)
+    buf = _io.BytesIO()
+    img.save(buf, "JPEG", quality=75)
+    if buf.tell() > 400 * 1024:  # 超过 400KB 继续降质量
+        buf = _io.BytesIO()
+        img.save(buf, "JPEG", quality=55)
+    buf.seek(0)
+
+    form = aiohttp.FormData()
+    form.add_field("reqtype", "fileupload")
+    form.add_field("fileToUpload", buf.read(), filename="frame.jpg", content_type="image/jpeg")
+
+    try:
+        async with session.post(
+            "https://catbox.moe/user/api.php",
+            data=form,
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as resp:
+            cdn_url = (await resp.text()).strip()
+        if not cdn_url.startswith("http"):
+            raise RuntimeError(f"catbox.moe 返回异常: {cdn_url[:200]}")
+        return cdn_url
+    except Exception as e:
+        raise RuntimeError(f"图片上传 CDN 失败: {e}")
 
 
 async def _submit_kling_omni(
@@ -246,8 +273,8 @@ async def _submit_kling_omni(
 
     token = _generate_kling_jwt(api_key, api_secret)
 
-    # 收集所有分镜的关键帧图片，压缩后上传到公开 URL
-    # 避免 base64 过大（单张图 1.5MB 的 base64 就有 2MB，5张共 10MB，导致超时）
+    # 收集所有分镜的关键帧图片，压缩后上传到 catbox.moe CDN，获取公开 URL
+    # Kling Omni 要求 image_list 使用公开 URL（image_url），不接受 base64
     image_list = []
     image_path_to_idx = {}  # path -> 1-based index
 
@@ -257,19 +284,9 @@ async def _submit_kling_omni(
             idx = len(image_list) + 1
             image_path_to_idx[kf_path] = idx
 
-            # 压缩图片到 960x540，quality=75，确保 base64 后 < 500KB
-            # Kling Omni 支持直接传 base64，无需上传 CDN
-            import io
-            img = PILImage.open(kf_path)
-            img.thumbnail((960, 540), PILImage.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=75)
-            # 如果还是太大，继续降质量
-            if buf.tell() > 400 * 1024:
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=55)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            image_list.append({"image_base64": b64})
+            # 上传到 catbox.moe CDN，获取公开 URL（纯 Python，Windows 兼容）
+            cdn_url = await _upload_image_to_cdn(kf_path, session)
+            image_list.append({"image_url": cdn_url})
 
     # 构建 multi_prompt 列表（每个分镜一条）
     # Kling Omni 规则（基于官方文档）：
@@ -310,7 +327,7 @@ async def _submit_kling_omni(
         "shot_type": "customize",          # customize = 自定义分镜（需传 multi_prompt）
         "prompt": "",                      # multi_shot=true 时顶层 prompt 无效
         "multi_prompt": multi_prompt,
-        "image_list": image_list,          # 关键帧图片列表（base64）
+        "image_list": image_list,          # 关键帧图片列表（公开 URL）
         "mode": "pro",
         "aspect_ratio": config.video_gen.kling.default_ratio or "16:9",
         "duration": total_duration_str,    # 各分镜时长之和，3~15s
