@@ -183,6 +183,9 @@ def run(topic, style, duration, engine, voice, no_subtitles, no_review,
             audio_result = {}
             errors = []
 
+            # 从配置获取默认 aspect_ratio（在线程外定义，保证后续步骤可用）
+            _aspect_ratio = getattr(config.video_gen.kling, 'default_ratio', '9:16') or '9:16'
+
             def gen_images():
                 try:
                     result = generate_all_keyframes_sync(
@@ -191,6 +194,7 @@ def run(topic, style, duration, engine, voice, no_subtitles, no_review,
                         reference_images=list(reference_image) if reference_image else [],
                         config=config,
                         verbose=verbose,
+                        aspect_ratio=_aspect_ratio,
                     )
                     keyframe_result.update(result)
                     for _ in result:
@@ -259,6 +263,7 @@ def run(topic, style, duration, engine, voice, no_subtitles, no_review,
                 auto_route=auto_route,
                 config=config,
                 verbose=verbose,
+                aspect_ratio=_aspect_ratio,
             )
             for _ in video_clips:
                 progress.advance(task_vid)
@@ -279,6 +284,7 @@ def run(topic, style, duration, engine, voice, no_subtitles, no_review,
                 output_path=final_video,
                 temp_dir=temp_dir,
                 add_subtitles=not no_subtitles,
+                aspect_ratio=_aspect_ratio,
             )
             assemble_video(plan, verbose=verbose)
 
@@ -294,6 +300,7 @@ def run(topic, style, duration, engine, voice, no_subtitles, no_review,
                 output_dir=draft_dir,
                 project_name=script.title,
                 verbose=verbose,
+                aspect_ratio=_aspect_ratio,
             )
 
         console.print(f"[green]✓[/green] 剪映草稿已生成")

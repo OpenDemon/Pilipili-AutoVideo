@@ -72,7 +72,7 @@ class VideoGenProviderConfig:
     model: str = ""
     base_url: str = ""
     default_duration: int = 5
-    default_ratio: str = "16:9"
+    default_ratio: str = "9:16"
     default_quality: str = "high"
 
 

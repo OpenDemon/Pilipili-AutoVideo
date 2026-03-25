@@ -222,13 +222,16 @@ def _split_voiceover_by_speaker(voiceover: str) -> list[tuple[str, str]]:
     - 'female' → 女声（女：、女（英语）： 等）
     - 'narrator' → 旁白成熟女声（无前缀的纯旁白）
 
+    支持多语言标记（如 男（英语）：、女（日语）：），
+    语言标记仅用于区分说话人，不过滤任何内容。
+
     示例：
     "女：你好。男：你好啊。女：再见。" →
     [('female', '你好。'), ('male', '你好啊。'), ('female', '再见。')]
     """
     import re
     # 匹配说话人前缀：男： / 女： / 男（xxx）： / 女（xxx）：
-    SPEAKER_PATTERN = re.compile(r'(男[（(][^）)]*[）)]：|女[（(][^）)]*[）)]：|男[：:]|女[：:])')
+    SPEAKER_PATTERN = re.compile(r'(男[\uff08(][^\uff09)]*[\uff09)]\uff1a|女[\uff08(][^\uff09)]*[\uff09)]\uff1a|男[\uff1a:]|女[\uff1a:])')
 
     segments = []
     last_end = 0

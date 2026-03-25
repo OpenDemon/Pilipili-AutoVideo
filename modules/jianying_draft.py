@@ -33,13 +33,32 @@ def _get_media_duration(filepath: str) -> Optional[float]:
         return None
 
 
+def _clean_voiceover_for_subtitle(text: str) -> str:
+    """
+    清洗 voiceover 文本用于字幕显示：移除说话人前缀（如 男：、女（英语）：）。
+    保留实际台词内容，去掉角色标记。
+    """
+    import re
+    # 移除 男： / 女： / 男（xxx）： / 女（xxx）：
+    cleaned = re.sub(r'男[\uff08(][^\uff09)]*[\uff09)]\uff1a|女[\uff08(][^\uff09)]*[\uff09)]\uff1a|男[\uff1a:]|女[\uff1a:]', '', text)
+    return cleaned.strip()
+
+
+def _get_resolution_for_aspect_ratio(aspect_ratio: str) -> tuple[int, int]:
+    """根据画面比例返回 (width, height)"""
+    if aspect_ratio in ("9:16", "3:4"):
+        return (1080, 1920)
+    return (1920, 1080)
+
+
 def generate_jianying_draft(
     script: VideoScript,
     video_clips: dict[int, str],
     audio_clips: dict[int, str],
     output_dir: str,
-    project_name: str = "噼哩噼哩作品",
+    project_name: str = "噪哩噪哩作品",
     verbose: bool = False,
+    aspect_ratio: str = "9:16",
 ) -> str:
     """
     生成剪映草稿工程文件（v2.0 分轨模式）
@@ -63,19 +82,19 @@ def generate_jianying_draft(
     try:
         import pyJianYingDraft as draft
         return _generate_with_pyjianyingdraft(
-            script, video_clips, audio_clips, output_dir, project_name, verbose
+            script, video_clips, audio_clips, output_dir, project_name, verbose, aspect_ratio
         )
     except ImportError:
         if verbose:
             print("[JianyingDraft] pyJianYingDraft 未安装，回退到 EDL 格式")
         return _generate_edl_fallback(
-            script, video_clips, audio_clips, output_dir, project_name, verbose
+            script, video_clips, audio_clips, output_dir, project_name, verbose, aspect_ratio
         )
     except Exception as e:
         if verbose:
             print(f"[JianyingDraft] pyJianYingDraft 生成失败 ({e})，回退到 EDL 格式")
         return _generate_edl_fallback(
-            script, video_clips, audio_clips, output_dir, project_name, verbose
+            script, video_clips, audio_clips, output_dir, project_name, verbose, aspect_ratio
         )
 
 
@@ -86,6 +105,7 @@ def _generate_with_pyjianyingdraft(
     output_dir: str,
     project_name: str,
     verbose: bool,
+    aspect_ratio: str = "9:16",
 ) -> str:
     """
     使用 pyJianYingDraft 生成标准剪映草稿（v2.0 分轨模式）
@@ -108,10 +128,11 @@ def _generate_with_pyjianyingdraft(
     if draft_folder.has_draft(safe_name):
         draft_folder.remove(safe_name)
 
+    _w, _h = _get_resolution_for_aspect_ratio(aspect_ratio)
     jy_draft = draft_folder.create_draft(
         draft_name=safe_name,
-        width=1920,
-        height=1080,
+        width=_w,
+        height=_h,
         fps=30,
         maintrack_adsorb=True,
         allow_replace=True,
@@ -160,10 +181,12 @@ def _generate_with_pyjianyingdraft(
 
         # ── 字幕片段（与配音时长对齐，可在剪映中单独修改文字）──
         if scene.voiceover.strip():
+            # 清洗说话人前缀，只保留实际台词
+            subtitle_text = _clean_voiceover_for_subtitle(scene.voiceover)
             # 字幕时长与配音对齐（如果有配音），否则与视频对齐
             subtitle_dur = audio_dur if (audio_path and os.path.exists(audio_path)) else video_dur
             text_segment = draft.TextSegment(
-                text=scene.voiceover.strip(),
+                text=subtitle_text,
                 timerange=draft.trange(f"{current_s}s", f"{subtitle_dur}s"),
                 style=draft.TextStyle(
                     size=8.0,
@@ -220,7 +243,7 @@ def _generate_scene_manifest(
         "topic": script.topic,
         "total_scenes": len(script.scenes),
         "total_duration": sum(s.duration for s in script.scenes),
-        "resolution": "1920x1080",
+        "resolution": "dynamic",
         "fps": 30,
         "note": "v2.0 分轨模式：每个分镜为独立片段，可在剪映中单独替换",
         "scenes": []
@@ -261,6 +284,7 @@ def _generate_edl_fallback(
     output_dir: str,
     project_name: str,
     verbose: bool,
+    aspect_ratio: str = "9:16",
 ) -> str:
     """
     回退方案：生成 EDL（Edit Decision List）文件
@@ -327,7 +351,7 @@ def _generate_edl_fallback(
 - {project_name}_manifest.json    → 分镜素材清单（含每个分镜的路径、时长、提示词）
 
 导入剪映步骤（分轨模式）：
-1. 打开剪映专业版，新建项目（1920x1080，30fps）
+1. 打开剪映专业版，新建项目（30fps）
 2. 将所有视频片段（scene_001_clip.mp4 等）导入素材库
 3. 按 manifest.json 中的顺序，将视频片段拖到主轨道
 4. 将对应的配音文件拖到音频轨道（与视频对齐）
@@ -335,7 +359,7 @@ def _generate_edl_fallback(
 6. 如需替换某个分镜：在素材库中替换对应片段即可
 
 导入 Premiere Pro 步骤：
-1. 新建序列（1920x1080，30fps）
+1. 新建序列（30fps）
 2. 文件 → 导入 → 选择 .edl 文件
 3. 将素材文件夹指定为视频片段所在目录
 
@@ -395,7 +419,7 @@ def _generate_srt_file(
 
         srt_lines.append(str(index))
         srt_lines.append(f"{fmt(start)} --> {fmt(end)}")
-        srt_lines.append(scene.voiceover.strip())
+        srt_lines.append(_clean_voiceover_for_subtitle(scene.voiceover))
         srt_lines.append("")
 
         current_time += scene.duration

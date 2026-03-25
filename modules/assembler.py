@@ -35,6 +35,7 @@ class AssemblyPlan:
     temp_dir: str
     add_subtitles: bool = True
     subtitle_style: str = "default"  # default / minimal / bold
+    aspect_ratio: str = "9:16"       # 画面比例：9:16 竖屏 / 16:9 横屏
 
 
 # Windows 兼容的 H.264 编码参数
@@ -78,10 +79,16 @@ def assemble_video(
     if verbose:
         print(f"[Assembler] 开始组装 {len(plan.scenes)} 个分镜")
 
+    # 根据 aspect_ratio 确定目标分辨率
+    if plan.aspect_ratio in ("9:16", "3:4"):
+        target_w, target_h = 1080, 1920  # 竖屏
+    else:
+        target_w, target_h = 1920, 1080  # 横屏
+
     # Step 0: 清理旧的临时文件，确保使用最新编码参数
     _clean_temp_files(plan.temp_dir, verbose=verbose)
 
-    # Step 1: 裁剪每段视频到精确时长 + 统一分辨率到 1920x1080
+    # Step 1: 裁剪每段视频到精确时长 + 统一分辨率
     trimmed_clips = {}
     for scene in plan.scenes:
         clip_path = plan.video_clips.get(scene.scene_id)
@@ -89,14 +96,15 @@ def assemble_video(
             raise FileNotFoundError(f"Scene {scene.scene_id} 视频片段不存在: {clip_path}")
 
         trimmed_path = os.path.join(plan.temp_dir, f"trimmed_{scene.scene_id:03d}.mp4")
-        _trim_video(clip_path, trimmed_path, scene.duration, verbose=verbose)
+        _trim_video(clip_path, trimmed_path, scene.duration,
+                    target_w=target_w, target_h=target_h, verbose=verbose)
         trimmed_clips[scene.scene_id] = trimmed_path
 
     # Step 2: 生成 SRT 字幕
     srt_path = None
     if plan.add_subtitles:
         srt_path = os.path.join(plan.temp_dir, "subtitles.srt")
-        _generate_srt(plan.scenes, plan.audio_clips, srt_path)
+        _generate_srt(plan.scenes, plan.audio_clips, srt_path, aspect_ratio=plan.aspect_ratio)
         if verbose:
             print(f"[Assembler] 字幕文件已生成: {srt_path}")
 
@@ -132,6 +140,7 @@ def assemble_video(
             output_path=plan.output_path,
             style=plan.subtitle_style,
             verbose=verbose,
+            aspect_ratio=plan.aspect_ratio,
         )
     else:
         # 无字幕，直接复制
@@ -360,26 +369,49 @@ def _burn_subtitles(
     output_path: str,
     style: str = "default",
     verbose: bool = False,
+    aspect_ratio: str = "9:16",
 ) -> None:
     """将 SRT 字幕烧录到视频"""
+    # 竖屏字幕需要更大字号和更高的底部边距
+    is_vertical = aspect_ratio in ("9:16", "3:4")
+
     # 字幕样式 - 使用 Windows 通用字体
-    style_configs = {
-        "default": (
-            "FontName=Microsoft YaHei,FontSize=22,PrimaryColour=&H00FFFFFF,"
-            "OutlineColour=&H00000000,Outline=2,Shadow=1,"
-            "Alignment=2,MarginV=30"
-        ),
-        "minimal": (
-            "FontName=Microsoft YaHei,FontSize=18,PrimaryColour=&H00FFFFFF,"
-            "OutlineColour=&H00000000,Outline=1,Shadow=0,"
-            "Alignment=2,MarginV=20"
-        ),
-        "bold": (
-            "FontName=Microsoft YaHei,FontSize=26,Bold=1,PrimaryColour=&H00FFFF00,"
-            "OutlineColour=&H00000000,Outline=3,Shadow=2,"
-            "Alignment=2,MarginV=40"
-        ),
-    }
+    if is_vertical:
+        style_configs = {
+            "default": (
+                "FontName=Microsoft YaHei,FontSize=16,PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,Outline=2,Shadow=1,"
+                "Alignment=2,MarginV=60"
+            ),
+            "minimal": (
+                "FontName=Microsoft YaHei,FontSize=14,PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,Outline=1,Shadow=0,"
+                "Alignment=2,MarginV=50"
+            ),
+            "bold": (
+                "FontName=Microsoft YaHei,FontSize=20,Bold=1,PrimaryColour=&H00FFFF00,"
+                "OutlineColour=&H00000000,Outline=3,Shadow=2,"
+                "Alignment=2,MarginV=80"
+            ),
+        }
+    else:
+        style_configs = {
+            "default": (
+                "FontName=Microsoft YaHei,FontSize=22,PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,Outline=2,Shadow=1,"
+                "Alignment=2,MarginV=30"
+            ),
+            "minimal": (
+                "FontName=Microsoft YaHei,FontSize=18,PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,Outline=1,Shadow=0,"
+                "Alignment=2,MarginV=20"
+            ),
+            "bold": (
+                "FontName=Microsoft YaHei,FontSize=26,Bold=1,PrimaryColour=&H00FFFF00,"
+                "OutlineColour=&H00000000,Outline=3,Shadow=2,"
+                "Alignment=2,MarginV=40"
+            ),
+        }
 
     style_str = style_configs.get(style, style_configs["default"])
 
@@ -398,11 +430,19 @@ def _burn_subtitles(
     _run_ffmpeg(cmd, verbose=verbose)
 
 
+def _clean_voiceover_for_subtitle(text: str) -> str:
+    """清洗 voiceover 文本用于字幕显示：移除说话人前缀（如 男：、女（英语）：）"""
+    import re
+    cleaned = re.sub(r'男[\uff08(][^\uff09)]*[\uff09)]\uff1a|女[\uff08(][^\uff09)]*[\uff09)]\uff1a|男[\uff1a:]|女[\uff1a:]', '', text)
+    return cleaned.strip()
+
+
 def _generate_srt(
     scenes: list[Scene],
     audio_clips: dict[int, str],
     output_path: str,
     transition_duration: float = 0.5,
+    aspect_ratio: str = "9:16",
 ) -> None:
     """根据分镜旁白和时长生成 SRT 字幕文件
 
@@ -432,9 +472,11 @@ def _generate_srt(
 
         end_time = start_time + duration
 
-        # 长文案分行（每行最多 20 个字）
-        text = scene.voiceover.strip()
-        lines = _split_subtitle_text(text, max_chars=20)
+        # 清洗说话人前缀 + 长文案分行
+        text = _clean_voiceover_for_subtitle(scene.voiceover)
+        # 竖屏每行字数更少（屏幕窄）
+        max_chars = 14 if aspect_ratio in ("9:16", "3:4") else 20
+        lines = _split_subtitle_text(text, max_chars=max_chars)
 
         srt_lines.append(str(index))
         srt_lines.append(f"{_format_srt_time(start_time)} --> {_format_srt_time(end_time)}")

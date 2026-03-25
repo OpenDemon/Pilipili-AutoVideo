@@ -207,6 +207,7 @@ def _build_omni_prompt(
 async def _upload_image_to_cdn(
     image_path: str,
     session: aiohttp.ClientSession,
+    aspect_ratio: str = "9:16",
 ) -> str:
     """
     将本地图片压缩后上传到 catbox.moe 免费 CDN，返回可公开访问的 URL。
@@ -216,9 +217,15 @@ async def _upload_image_to_cdn(
     import io as _io
     from PIL import Image as _PILImage
 
-    # 压缩图片到 960x540，JPEG quality=75，确保上传快速
+    # 根据 aspect_ratio 决定压缩目标尺寸
+    if aspect_ratio in ("9:16", "3:4"):
+        max_size = (540, 960)  # 竖屏
+    else:
+        max_size = (960, 540)  # 横屏
+
+    # 压缩图片，JPEG quality=75，确保上传快速
     img = _PILImage.open(image_path)
-    img.thumbnail((960, 540), _PILImage.LANCZOS)
+    img.thumbnail(max_size, _PILImage.LANCZOS)
     buf = _io.BytesIO()
     img.save(buf, "JPEG", quality=75)
     if buf.tell() > 400 * 1024:  # 超过 400KB 继续降质量
@@ -250,6 +257,7 @@ async def _submit_kling_omni(
     config: PilipiliConfig,
     session: aiohttp.ClientSession,
     reference_images: Optional[list[str]] = None,
+    aspect_ratio: Optional[str] = None,
 ) -> str:
     """
     提交 Kling Omni 多镜头任务（修复版），返回 task_id
@@ -285,7 +293,8 @@ async def _submit_kling_omni(
             image_path_to_idx[kf_path] = idx
 
             # 上传到 catbox.moe CDN，获取公开 URL（纯 Python，Windows 兼容）
-            cdn_url = await _upload_image_to_cdn(kf_path, session)
+            _ar = aspect_ratio or config.video_gen.kling.default_ratio or "9:16"
+            cdn_url = await _upload_image_to_cdn(kf_path, session, aspect_ratio=_ar)
             image_list.append({"image_url": cdn_url})
 
     # 构建 multi_prompt 列表（每个分镜一条）
@@ -336,7 +345,7 @@ async def _submit_kling_omni(
         "multi_prompt": multi_prompt,
         "image_list": image_list,          # 关键帧图片列表（公开 URL）
         "mode": "pro",
-        "aspect_ratio": config.video_gen.kling.default_ratio or "16:9",
+        "aspect_ratio": aspect_ratio or config.video_gen.kling.default_ratio or "9:16",
         "duration": total_duration_str,    # 各分镜时长之和，3~15s
     }
 
@@ -424,6 +433,7 @@ async def _submit_kling_i2v(
     config: PilipiliConfig,
     session: aiohttp.ClientSession,
     resolution: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
 ) -> str:
     """提交 Kling v3 I2V 任务，返回 task_id（旧版接口，作为 Omni 回退）"""
     api_key = config.video_gen.kling.api_key
@@ -449,7 +459,7 @@ async def _submit_kling_i2v(
         "cfg_scale": 0.5,
         "mode": "std",
         "duration": str(duration),
-        "aspect_ratio": config.video_gen.kling.default_ratio or "16:9",
+        "aspect_ratio": aspect_ratio or config.video_gen.kling.default_ratio or "9:16",
     }
 
     url = f"{config.video_gen.kling.base_url}/v1/videos/image2video"
@@ -526,6 +536,7 @@ async def _submit_seedance_i2v(
     scene: Scene,
     config: PilipiliConfig,
     session: aiohttp.ClientSession,
+    aspect_ratio: Optional[str] = None,
 ) -> str:
     """提交 Seedance I2V 任务，返回 task_id"""
     api_key = config.video_gen.seedance.api_key
@@ -554,7 +565,7 @@ async def _submit_seedance_i2v(
             }
         ],
         "duration": duration,
-        "ratio": config.video_gen.seedance.default_ratio or "16:9",
+        "ratio": aspect_ratio or config.video_gen.seedance.default_ratio or "9:16",
         "seed": -1,
     }
 
@@ -628,6 +639,7 @@ async def generate_video_clip(
     config: Optional[PilipiliConfig] = None,
     verbose: bool = False,
     reference_images: Optional[list[str]] = None,
+    aspect_ratio: Optional[str] = None,
 ) -> str:
     """
     为单个分镜生成视频片段（使用旧版 i2v 接口）
@@ -681,6 +693,7 @@ async def generate_video_clip(
                     config=config,
                     session=session,
                     reference_images=reference_images,
+                    aspect_ratio=aspect_ratio,
                 )
                 if verbose:
                     print(f"[VideoGen] Kling Omni 任务已提交: {task_id}")
@@ -693,7 +706,7 @@ async def generate_video_clip(
                 raise RuntimeError(f"[VideoGen] Kling Omni 失败，不降级处理: {omni_err}") from omni_err
 
         elif selected_engine == "seedance":
-            task_id = await _submit_seedance_i2v(image_path, scene, config, session)
+            task_id = await _submit_seedance_i2v(image_path, scene, config, session, aspect_ratio=aspect_ratio)
             if verbose:
                 print(f"[VideoGen] Seedance 任务已提交: {task_id}")
             video_url = await _poll_seedance_task(task_id, config, session)
@@ -725,6 +738,7 @@ async def generate_video_clips_omni_batch(
     batch_size: int = 6,
     verbose: bool = False,
     resolution: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
 ) -> dict[int, str]:
     """
     使用 Kling Omni 多镜头模式批量生成视频片段
@@ -775,6 +789,7 @@ async def generate_video_clips_omni_batch(
                     config=config,
                     session=session,
                     reference_images=reference_images,
+                    aspect_ratio=aspect_ratio,
                 )
 
                 if verbose:
@@ -822,6 +837,7 @@ async def generate_all_video_clips(
     reference_images: Optional[list[str]] = None,
     use_omni_batch: bool = True,
     resolution: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
 ) -> dict[int, str]:
     """
     生成所有分镜的视频片段
@@ -857,6 +873,7 @@ async def generate_all_video_clips(
             reference_images=reference_images,
             verbose=verbose,
             resolution=resolution,
+            aspect_ratio=aspect_ratio,
         )
 
     # 回退到逐个生成模式（并发）
@@ -881,6 +898,7 @@ async def generate_all_video_clips(
                 config=config,
                 verbose=verbose,
                 reference_images=reference_images,
+                aspect_ratio=aspect_ratio,
             )
             results[scene.scene_id] = path
 
@@ -902,6 +920,7 @@ def generate_all_video_clips_sync(
     reference_images: Optional[list[str]] = None,
     use_omni_batch: bool = True,
     resolution: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
 ) -> dict[int, str]:
     """generate_all_video_clips 的同步版本"""
     return asyncio.run(generate_all_video_clips(
@@ -916,4 +935,5 @@ def generate_all_video_clips_sync(
         reference_images=reference_images,
         use_omni_batch=use_omni_batch,
         resolution=resolution,
+        aspect_ratio=aspect_ratio,
     ))

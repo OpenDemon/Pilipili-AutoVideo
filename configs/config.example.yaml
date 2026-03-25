@@ -57,7 +57,7 @@ video_gen:
     model: "kling-v3"
     base_url: "https://api-beijing.klingai.com"   # 国内版；国际版用 https://api-singapore.klingai.com
     default_duration: 5          # 秒，会被 TTS 时长动态覆盖
-    default_ratio: "16:9"
+    default_ratio: "9:16"        # 默认竖屏；横屏用 "16:9"
     default_quality: "high"
 
   seedance:
@@ -65,7 +65,7 @@ video_gen:
     model: "doubao-seedance-1-5-pro-250528"
     base_url: "https://ark.cn-beijing.volces.com/api/v3"
     default_duration: 5
-    default_ratio: "16:9"
+    default_ratio: "9:16"        # 默认竖屏；横屏用 "16:9"
 
 # ============================================================
 # 配音层：MiniMax TTS（文案类）/ Seedance 原生音频（剧情类）

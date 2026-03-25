@@ -217,6 +217,8 @@ class CreateProjectRequest(BaseModel):
     preset_scenes: Optional[list[dict]] = None   # 对标分析分镜（有则跳过 LLM 生成）
     preset_title: Optional[str] = None           # 对标分析标题
     resolution: Optional[str] = "1080p"          # 输出分辨率："720p" / "1080p" / "4K"
+    aspect_ratio: Optional[str] = "9:16"         # 画面比例："9:16" 竖屏 / "16:9" 横屏
+    global_style_prompt: Optional[str] = ""      # 全局风格提示词（防止风格漂移）
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -537,6 +539,13 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
         audio_dir = os.path.join(project_dir, "audio")
 
         # 并行执行生图和 TTS
+        # 确定 aspect_ratio：优先用请求参数，其次用配置默认值
+        aspect_ratio = request.aspect_ratio or getattr(config.video_gen.kling, 'default_ratio', '9:16') or "9:16"
+        global_style_prompt = request.global_style_prompt or ""
+        # 如果是对标分析模式，从分析结果提取风格提示词
+        if not global_style_prompt and script.style:
+            global_style_prompt = script.style
+
         keyframe_task = asyncio.to_thread(
             generate_all_keyframes_sync,
             scenes=script.scenes,
@@ -545,6 +554,8 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             characters=script.characters or [],
             config=config,
             verbose=True,
+            aspect_ratio=aspect_ratio,
+            global_style_prompt=global_style_prompt,
         )
 
         audio_task = asyncio.to_thread(
@@ -591,12 +602,13 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             config=config,
             verbose=True,
             resolution=request.resolution or "1080p",
+            aspect_ratio=aspect_ratio,
         )
 
         await push_status(project_id, WorkflowStage.ASSEMBLING, 80,
                           "视频片段生成完成，开始组装最终成片...")
 
-        # ── 阶段 5：组装拼接 ──────────────────────────────────
+        # ── 阶段 5：组装拼接 ──────────────────────────
         output_dir = os.path.join(project_dir, "output")
         temp_dir = os.path.join(project_dir, "temp")
         # 清理文件名中的非法字符（Windows 兼容）
@@ -611,6 +623,7 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             output_path=final_video,
             temp_dir=temp_dir,
             add_subtitles=request.add_subtitles,
+            aspect_ratio=aspect_ratio,
         )
 
         await asyncio.to_thread(assemble_video, plan, True)
@@ -625,6 +638,7 @@ async def run_workflow(project_id: str, request: CreateProjectRequest):
             output_dir=draft_dir,
             project_name=safe_title,
             verbose=True,
+            aspect_ratio=aspect_ratio,
         )
 
         # 完成
@@ -907,6 +921,9 @@ async def run_resume_workflow(project_id: str, video_engine: str = "kling", add_
         engine = None if video_engine == "auto" else video_engine
         auto_route = (video_engine == "auto")
 
+        # 从脚本中提取 aspect_ratio（对标分析会写入），默认竖屏
+        aspect_ratio = script_dict.get("aspect_ratio", "9:16")
+
         video_clips = await asyncio.to_thread(
             generate_all_video_clips_sync,
             scenes=script.scenes,
@@ -916,13 +933,14 @@ async def run_resume_workflow(project_id: str, video_engine: str = "kling", add_
             auto_route=auto_route,
             config=config,
             verbose=True,
-            resolution=request.resolution or "1080p",
+            resolution="1080p",
+            aspect_ratio=aspect_ratio,
         )
 
         await push_status(project_id, WorkflowStage.ASSEMBLING, 80,
                           "视频片段生成完成，开始组装最终成片...")
 
-        # ── 组装拼接 ──────────────────────────────────────────
+        # ── 组装拼接 ──────────────────────────────────────
         output_dir = os.path.join(project_dir, "output")
         temp_dir = os.path.join(project_dir, "temp")
         safe_title = "".join(c for c in script.title if c not in r'\/:*?"<>|').strip() or "output"
@@ -936,6 +954,7 @@ async def run_resume_workflow(project_id: str, video_engine: str = "kling", add_
             output_path=final_video,
             temp_dir=temp_dir,
             add_subtitles=add_subtitles,
+            aspect_ratio=aspect_ratio,
         )
         await asyncio.to_thread(assemble_video, plan, True)
 
@@ -949,6 +968,7 @@ async def run_resume_workflow(project_id: str, video_engine: str = "kling", add_
             output_dir=draft_dir,
             project_name=safe_title,
             verbose=True,
+            aspect_ratio=aspect_ratio,
         )
 
         result = {

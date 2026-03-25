@@ -62,6 +62,8 @@ async def generate_keyframe(
     style_reference: Optional[str] = None,
     config: Optional[PilipiliConfig] = None,
     verbose: bool = False,
+    aspect_ratio: str = "9:16",
+    global_style_prompt: str = "",
 ) -> str:
     """
     为单个分镜生成关键帧图片
@@ -103,11 +105,22 @@ async def generate_keyframe(
     if style_str:
         full_prompt = f"{full_prompt}, style: {style_str}"
 
+    # 添加全局风格锁定（防止风格漂移）
+    if global_style_prompt:
+        full_prompt = f"{full_prompt}. GLOBAL STYLE LOCK: {global_style_prompt}"
+
+    # 根据 aspect_ratio 设置图片方向提示
+    if aspect_ratio in ("9:16", "3:4"):
+        orientation_hint = "vertical portrait orientation (9:16 aspect ratio, taller than wide)"
+    else:
+        orientation_hint = "horizontal landscape orientation (16:9 aspect ratio, wider than tall)"
+
     # 添加质量提示词
     full_prompt = (
         f"{full_prompt}, "
         f"ultra high quality, 1080P resolution, cinematic composition, "
-        f"professional photography, sharp focus, detailed"
+        f"professional photography, sharp focus, detailed, "
+        f"{orientation_hint}"
     )
 
     if verbose:
@@ -132,15 +145,19 @@ async def generate_keyframe(
             contents.extend(ref_parts)
             contents.append(types.Part.from_text(
                 text=(
-                    "CRITICAL CHARACTER CONSISTENCY INSTRUCTION: "
-                    "The reference image(s) above show the EXACT character(s) that MUST appear in the generated image. "
-                    "You MUST preserve: 1) The EXACT same face, facial features, and facial structure. "
-                    "2) The EXACT same hairstyle, hair color, and hair length. "
-                    "3) The EXACT same clothing, accessories, glasses, hats, and other distinctive items. "
-                    "4) The EXACT same body type and proportions. "
-                    "5) The EXACT same skin tone and complexion. "
-                    "The character should look like the SAME PERSON in a different scene/pose, NOT a different person. "
-                    "This is the highest priority requirement — character identity must be preserved above all else."
+                    "CRITICAL CHARACTER CONSISTENCY INSTRUCTION (HIGHEST PRIORITY): "
+                    "The reference image(s) above show the EXACT male protagonist character. "
+                    "You MUST generate an image where this EXACT SAME PERSON appears. "
+                    "MANDATORY requirements (violation = failure): "
+                    "1) IDENTICAL face shape, jawline, eyes, nose, mouth - pixel-level facial match. "
+                    "2) IDENTICAL hairstyle, hair color, hair length, hair texture. "
+                    "3) IDENTICAL clothing: same suit/shirt/outfit color, style, fit. "
+                    "4) IDENTICAL body type, height proportions, skin tone. "
+                    "5) IDENTICAL accessories (glasses, watch, tie, etc). "
+                    "The output MUST look like a photo of the SAME REAL PERSON in a different scene. "
+                    "Do NOT create a different person who merely looks similar. "
+                    "Do NOT change the character's ethnicity, age, or gender. "
+                    "CHARACTER IDENTITY PRESERVATION IS THE #1 PRIORITY - above artistic style or scene accuracy."
                 )
             ))
 
@@ -339,7 +356,7 @@ async def generate_keyframe(
 
         # 仍失败：生成纯色占位图，让流程继续
         if not image_saved:
-            _create_placeholder_image(output_path, scene.scene_id, verbose)
+            _create_placeholder_image(output_path, scene.scene_id, verbose, aspect_ratio=aspect_ratio)
             image_saved = True
             if verbose:
                 print(f"[ImageGen] Scene {scene.scene_id} 已使用占位图替代，流程继续")
@@ -359,6 +376,8 @@ async def generate_all_keyframes(
     max_concurrent: int = 3,
     verbose: bool = False,
     characters: Optional[list] = None,  # list[CharacterInfo]
+    aspect_ratio: str = "9:16",
+    global_style_prompt: str = "",
 ) -> dict[int, str]:
     """
     并发生成所有分镜的关键帧
@@ -419,6 +438,8 @@ async def generate_all_keyframes(
                 style_reference=style_reference,
                 config=config,
                 verbose=verbose,
+                aspect_ratio=aspect_ratio,
+                global_style_prompt=global_style_prompt,
             )
             results[scene.scene_id] = path
 
@@ -437,6 +458,8 @@ def generate_all_keyframes_sync(
     max_concurrent: int = 3,
     verbose: bool = False,
     characters: Optional[list] = None,
+    aspect_ratio: str = "9:16",
+    global_style_prompt: str = "",
 ) -> dict[int, str]:
     """generate_all_keyframes 的同步版本"""
     return asyncio.run(generate_all_keyframes(
@@ -448,6 +471,8 @@ def generate_all_keyframes_sync(
         max_concurrent=max_concurrent,
         verbose=verbose,
         characters=characters,
+        aspect_ratio=aspect_ratio,
+        global_style_prompt=global_style_prompt,
     ))
 
 
@@ -492,12 +517,15 @@ def _make_safe_prompt(scene: Scene) -> str:
     return safe
 
 
-def _create_placeholder_image(output_path: str, scene_id: int, verbose: bool = False) -> None:
+def _create_placeholder_image(output_path: str, scene_id: int, verbose: bool = False, aspect_ratio: str = "9:16") -> None:
     """
-    生成纯色占位图（1920x1080 深灰色，带场景编号文字）。
-    用于所有模型均无法生成图片时的兜底，让流程继续运行。
+    生成纯色占位图（深灰色，带场景编号文字）。
+    用于所有模型均无法生成图片时的兆底，让流程继续运行。
     """
-    width, height = 1920, 1080
+    if aspect_ratio in ("9:16", "3:4"):
+        width, height = 720, 1280  # 竖屏
+    else:
+        width, height = 1920, 1080  # 横屏
     if _PIL_AVAILABLE:
         img = Image.new("RGB", (width, height), color=(30, 30, 40))
         draw = ImageDraw.Draw(img)
